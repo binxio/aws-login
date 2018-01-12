@@ -2,7 +2,7 @@
 
 Things might break, are not fully tested, refactoring should happen, features should be added.
 
-# AWS Role Based Access Wrapper
+# AWS Login for Role Based Access in AWS
 
 This tool could be used to secure and automate the execution of aws cli.
 
@@ -10,7 +10,7 @@ This tool could be used to secure and automate the execution of aws cli.
 
 ```
 .aws-login admin@prod aws sts get-caller-identity
-AWS_RBA_WRAPPER_USER not set, please enter the profile: mypersonalprofile
+AWS_LOGIN_PROFILE not set, please enter the profile: mypersonalprofile
 Enter MFA Token Code: 123456
 {
     "Account": "1234567890",
@@ -41,7 +41,7 @@ role = testRole
 ## Set wrapper profile
 
 ```
-export AWS_RBA_WRAPPER_USER=mypersonalprofile
+export AWS_LOGIN_PROFILE=mypersonalprofile
 ```
 
 ## Make an alias
