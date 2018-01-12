@@ -91,3 +91,26 @@ aws-login developer@dev
 Enter MFA Token Code: 123456
 Session refreshed
 ```
+
+You could also generate the keys and export them to use in all next commands. 
+
+```
+aws-login test@prod keys
+AWS_ACCESS_KEY_ID=ASDSFSDFSDFSDFSDFSDF 
+AWS_SECRET_ACCESS_KEY=DSGSDGSDGFSDFSDFSDFSDFSDFSDF 
+AWS_SESSION_TOKEN=DFSDFSDFSDFSDFSDFSDFSDFSDF
+```
+
+Make sure your session is not expired.
+
+```
+aws-login test@prod
+Enter MFA Token Code: 123456
+export $(./aws-login test@prod keys)
+aws sts get-caller-identity
+{
+    "Account": "1234567890",
+    "UserId": "AELWEHRWJKEHRLKWERHLWEK:test@prod",
+    "Arn": "arn:aws:sts::1234567890:assumed-role/testRole/admin@prod"
+}
+```

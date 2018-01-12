@@ -188,6 +188,7 @@ if __name__ == '__main__':
         print("Use: ./aws-login rba_profile [command]")
         print("Example: ./aws-login admin@prod aws sts get-caller-identity")
         print("Example: ./aws-login admin@prod mc")
+        print("Example: ./aws-login admin@prod keys")
         print("Example: ./aws-login admin@prod")
         exit(1)
 
@@ -204,5 +205,10 @@ if __name__ == '__main__':
     elif sys.argv[2] == 'mc':
         link = generate_magic_link(profile, role_profile)
         chrome(link)
+    elif sys.argv[2] == 'keys':
+        temp_keys = read_credentials(role_profile)
+        print('AWS_ACCESS_KEY_ID='+ temp_keys['aws_access_key_id'] +
+              ' AWS_SECRET_ACCESS_KEY='+ temp_keys['aws_secret_access_key'] +
+              ' AWS_SESSION_TOKEN='+ temp_keys['aws_session_token'] )
     else:
         execute_command(role_profile, command)
