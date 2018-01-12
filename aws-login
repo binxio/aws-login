@@ -181,13 +181,14 @@ def generate_magic_link(profile, role_profile):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 2:
+    if len(sys.argv) > 1:
         role_profile = sys.argv[1]
         command = ' '.join(sys.argv[2:])
     else:
-        print("Use: ./aws-login rba_profile command")
+        print("Use: ./aws-login rba_profile [command]")
         print("Example: ./aws-login admin@prod aws sts get-caller-identity")
         print("Example: ./aws-login admin@prod mc")
+        print("Example: ./aws-login admin@prod")
         exit(1)
 
     if "AWS_RBA_WRAPPER_USER" not in os.environ:
@@ -198,7 +199,9 @@ if __name__ == '__main__':
     mfa_profile = profile+'_mfa'
     check_and_set_mfa_session(profile)
     assume_role_credentials(mfa_profile, role_profile)
-    if sys.argv[2] == 'mc':
+    if len(sys.argv) == 2:
+        print('Session refreshed')
+    elif sys.argv[2] == 'mc':
         link = generate_magic_link(profile, role_profile)
         chrome(link)
     else:
