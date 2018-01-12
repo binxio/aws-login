@@ -191,10 +191,10 @@ if __name__ == '__main__':
         print("Example: ./aws-login admin@prod")
         exit(1)
 
-    if "AWS_RBA_WRAPPER_USER" not in os.environ:
-        profile = input("AWS_RBA_WRAPPER_USER not set, please enter the profile: ")
+    if "AWS_LOGIN_PROFILE" not in os.environ:
+        profile = input("AWS_LOGIN_PROFILE not set, please enter the profile: ")
     else:
-        profile = os.environ['AWS_RBA_WRAPPER_USER']
+        profile = os.environ['AWS_LOGIN_PROFILE']
 
     mfa_profile = profile+'_mfa'
     check_and_set_mfa_session(profile)
