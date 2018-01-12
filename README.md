@@ -9,7 +9,7 @@ This tool could be used to secure and automate the execution of aws cli.
 ## Usage
 
 ```
-.aws-rba-wrapper.py admin@prod aws sts get-caller-identity
+.aws-login.py admin@prod aws sts get-caller-identity
 AWS_RBA_WRAPPER_USER not set, please enter the profile: mypersonalprofile
 Enter MFA Token Code: 123456
 {
@@ -47,7 +47,7 @@ export AWS_RBA_WRAPPER_USER=mypersonalprofile
 ## Make an alias
 
 ```
-alias rba='./aws-rba-wrapper.py'
+alias rba='./aws-login.py'
 ```
 
 ## Try some commands
