@@ -185,9 +185,9 @@ if __name__ == '__main__':
         role_profile = sys.argv[1]
         command = ' '.join(sys.argv[2:])
     else:
-        print("Use: ./aws-login.py rba_profile command")
-        print("Example: ./aws-login.py admin@prod aws sts get-caller-identity")
-        print("Example: ./aws-login.py admin@prod mc")
+        print("Use: ./aws-login rba_profile command")
+        print("Example: ./aws-login admin@prod aws sts get-caller-identity")
+        print("Example: ./aws-login admin@prod mc")
         exit(1)
 
     if "AWS_RBA_WRAPPER_USER" not in os.environ:
