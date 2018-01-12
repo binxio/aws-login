@@ -47,7 +47,7 @@ export AWS_RBA_WRAPPER_USER=mypersonalprofile
 ## Make an alias
 
 ```
-alias rba='./aws-login.py'
+alias rba='./aws-login'
 ```
 
 ## Try some commands
