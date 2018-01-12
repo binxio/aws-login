@@ -9,7 +9,7 @@ This tool could be used to secure and automate the execution of aws cli.
 ## Usage
 
 ```
-.aws-login admin@prod aws sts get-caller-identity
+./aws-login admin@prod aws sts get-caller-identity
 AWS_LOGIN_PROFILE not set, please enter the profile: mypersonalprofile
 Enter MFA Token Code: 123456
 {
@@ -84,10 +84,10 @@ aws-login test@prod mc
 Enter MFA Token Code: 123456
 ```
 
-And just refresh the session:
+And just refresh the session for example. Best practice here is that your personal account has no access, except to assume a role with MFA required. Your software running locally, uses the AWS credentials profile: developer@dev. After the refresh is done, it has the exact permissions for a limited amount of time. Abuse of access keys is limited to the max.
 
 ```
-aws-login test@prod
+aws-login developer@dev
 Enter MFA Token Code: 123456
 Session refreshed
 ```
