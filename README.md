@@ -47,7 +47,7 @@ export AWS_RBA_WRAPPER_USER=mypersonalprofile
 ## Make an alias
 
 ```
-alias rba='./aws-login'
+alias aws-login='./aws-login'
 ```
 
 ## Try some commands
@@ -55,7 +55,7 @@ alias rba='./aws-login'
 Check your identity:
 
 ```
-rba test@prod aws sts get-caller-identity
+aws-login test@prod aws sts get-caller-identity
 {
     "Account": "1234567890",
     "UserId": "AELWEHRWJKEHRLKWERHLWEK:admin@prod",
@@ -66,20 +66,28 @@ rba test@prod aws sts get-caller-identity
 Show your buckets:
 
 ```
-rba test@prod aws s3 ls
+aws-login test@prod aws s3 ls
 2018-01-09 10:48:12 thiscouldbeoneofyourbuckets
 ```
 
 You'll get an error if you don't have access:
 
 ```
-rba test@prod aws ec2 describe-instances --region eu-west-1
+aws-login test@prod aws ec2 describe-instances --region eu-west-1
 An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation: You are not authorized to perform this operation.
 ```
 
 Open chrome with the management console. This is work in progress, as it currently only support Chrome on a Mac. It also requires a new MFA session.
 
 ```
-rba test@prod mc
+aws-login test@prod mc
 Enter MFA Token Code: 123456
+```
+
+And just refresh the session:
+
+```
+aws-login test@prod
+Enter MFA Token Code: 123456
+Session refreshed
 ```
