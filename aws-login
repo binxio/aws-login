@@ -199,14 +199,17 @@ if __name__ == '__main__':
     check_and_set_mfa_session(profile)
     assume_role_credentials(mfa_profile, role_profile)
     if len(sys.argv) == 2:
-        print('Session refreshed')
+        print('INFO: Session refreshed')
     elif sys.argv[2] == 'mc':
         link = generate_magic_link(profile, role_profile)
         chrome(link)
     elif sys.argv[2] == 'keys':
         temp_keys = read_credentials(role_profile)
-        print('AWS_ACCESS_KEY_ID='+ temp_keys['aws_access_key_id'] +
-              ' AWS_SECRET_ACCESS_KEY='+ temp_keys['aws_secret_access_key'] +
-              ' AWS_SESSION_TOKEN='+ temp_keys['aws_session_token'] )
+        template = ('AWS_ACCESS_KEY_ID={} '
+                    'AWS_SECRET_ACCESS_KEY={} '
+                    'AWS_SESSION_TOKEN={} ')
+        print(template.format(temp_keys['aws_access_key_id'],
+                              temp_keys['aws_secret_access_key'],
+                              temp_keys['aws_session_token']))
     else:
         execute_command(role_profile, command)
