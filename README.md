@@ -113,4 +113,6 @@ aws sts get-caller-identity
     "UserId": "AELWEHRWJKEHRLKWERHLWEK:test@prod",
     "Arn": "arn:aws:sts::1234567890:assumed-role/testRole/admin@prod"
 }
+eval $(aws-login test@prod keys) aws s3 ls
+2018-01-09 10:48:12 thiscouldbeoneofyourbuckets
 ```
