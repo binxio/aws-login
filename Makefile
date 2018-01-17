@@ -15,5 +15,8 @@ clean:
 	python setup.py clean
 	rm -rf build/* dist/*
 
+autopep:
+	autopep8 --experimental --in-place --max-line-length 132 $(shell find . -name \*.py)
+
 install:
 	python setup.py install

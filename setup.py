@@ -15,19 +15,19 @@ with open(path.join(here, 'README.rst'), 'r') as f:
 version = "0.0.3"
 
 setup(
-    name = 'aws-login',
-    packages = ['aws_login'],
-    entry_points = {
+    name='aws-login',
+    packages=['aws_login'],
+    entry_points={
         'console_scripts': ['aws-login = aws_login.aws_login:main']
-        },
-    version = version,
-    description = 'AWS login using the Secure Token Service',
+    },
+    version=version,
+    description='AWS login using the Secure Token Service',
     long_description=long_description,
     include_package_data=True,
     zip_safe=False,
     platforms='any',
-    install_requires=['boto3', 'requests', 'configparser'],
-    author = 'Martijn van Dongen',
-    author_email = 'martijnvandongen@binx.io',
-    url = 'https://github.com/binxio/aws-login',
-    )
+    install_requires=['boto3', 'requests', 'configparser', 'click'],
+    author='Martijn van Dongen',
+    author_email='martijnvandongen@binx.io',
+    url='https://github.com/binxio/aws-login',
+)
