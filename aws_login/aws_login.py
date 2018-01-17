@@ -27,7 +27,7 @@ class AWSLogin(object):
         self.token = None
 
     def read_login_credentials(self):
-        if self.profile is not None:
+        if self.login_profile == 'login' and self.profile != 'default':
             saved_login_profile = read_credentials(self.profile, self.verbose)
             self.login_profile = saved_login_profile['source_profile']
         self.login_credentials = read_credentials(self.login_profile, self.verbose)
