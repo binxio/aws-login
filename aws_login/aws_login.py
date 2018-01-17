@@ -27,6 +27,9 @@ class AWSLogin(object):
         self.token = None
 
     def read_login_credentials(self):
+        if self.profile is not None:
+            saved_login_profile = read_credentials(self.profile, self.verbose)
+            self.login_profile = saved_login_profile['source_profile']
         self.login_credentials = read_credentials(self.login_profile, self.verbose)
         if len(self.login_credentials) == 0:
             sys.stderr.write('ERROR: no credentials found in profile "{}"\n'.format(self.login_profile))
@@ -105,7 +108,7 @@ class AWSLogin(object):
                 RoleSessionName='{}-{}'.format(self.get_username(), self.profile),
                 DurationSeconds=3600
             )
-            write_credentials(self.profile, response['Credentials'], role_arn, self.login_profile + '_mfa')
+            write_credentials(self.profile, response['Credentials'], role_arn, self.login_profile)
             if self.verbose:
                 sys.stderr.write('INFO: refreshed credentials for "{}"\n'.format(self.profile))
         else:
