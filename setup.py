@@ -12,7 +12,7 @@ here = path.abspath(path.dirname(__file__))
 with open(path.join(here, 'README.rst'), 'r') as f:
     long_description = f.read()
 
-version='0.11.1'
+version = "0.0.2"
 
 setup(
     name = 'aws-login',
