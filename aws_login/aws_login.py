@@ -96,14 +96,20 @@ class AWSLogin(object):
             role_arn = 'arn:aws:iam::%s:role/%s' % (account_id, role)
             expired = True
         else:
-            if 'role_arn' in credentials:
-                role_arn = credentials.get('role_arn')
+            if 'assume_role_arn' in credentials:
+                role_arn = credentials.get('assume_role_arn')
             else:
                 sys.stderr.write('INFO: no role specified. please specify --role and --account-id\n')
                 return
 
         if expired:
-            response = self.sts.assume_role(
+            #TODO: We need to establish a sts client with MFA session keys!
+            creds = read_credentials(self.login_profile + '_mfa', self.verbose)
+            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
+                      'aws_secret_access_key': creds['aws_secret_access_key'],
+                      'aws_session_token': creds['aws_session_token']}
+            sts = boto3.client('sts', **kwargs)
+            response = sts.assume_role(
                 RoleArn=role_arn,
                 RoleSessionName='{}-{}'.format(self.get_username(), self.profile),
                 DurationSeconds=3600
@@ -137,12 +143,19 @@ class AWSLogin(object):
 
     def generate_magic_link(self):
         profile = read_credentials(self.profile,  self.verbose)
-        role_arn = profile['role_arn']
+        role_arn = profile['assume_role_arn']
         token = self.token if self.token is not None else input("Enter MFA Token Code:")
 
         username = self.get_username()
         mfa_arn = self.get_mfa_serial_number()
 
+
+        #  creds = read_credentials(self.login_profile + '_mfa', self.verbose)
+        # kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
+        #             'aws_secret_access_key': creds['aws_secret_access_key'],
+        #             'aws_session_token': creds['aws_session_token']}
+        # sts = boto3.client('sts', **kwargs)
+        # response = sts.assume_role(
         response = self.sts.assume_role(
             RoleArn=role_arn,
             RoleSessionName='{}-{}'.format(username, self.profile),
@@ -166,7 +179,7 @@ class AWSLogin(object):
         console = requests.Request('GET',
                                    'https://signin.aws.amazon.com/federation',
                                    params={'Action': 'login',
-                                           'Issuer': 'aws-login',
+                                           'Issuer': 'awslogin',
                                            'Destination': 'https://console.aws.amazon.com/',
                                            'SigninToken': signin_token['SigninToken']})
         prepared_link = console.prepare()
@@ -309,7 +322,7 @@ def write_credentials(profile, credentials, role_arn=None, source_profile=None):
     config.set(profile, 'aws_session_token', credentials['SessionToken'])
 
     if role_arn is not None:
-        config.set(profile, 'role_arn', role_arn)
+        config.set(profile, 'assume_role_arn', role_arn)
 
     if 'Expiration' in credentials:
         config.set(profile, 'expiration', credentials['Expiration'].strftime('%Y-%m-%d %H:%M'))
