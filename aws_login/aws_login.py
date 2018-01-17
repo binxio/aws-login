@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import os.path
 import sys
@@ -178,7 +177,7 @@ def generate_magic_link(profile, role_profile):
     return prepared_link.url
 
 
-if __name__ == '__main__':
+def main():
     if len(sys.argv) > 1:
         role_profile = sys.argv[1]
         command = ' '.join(sys.argv[2:])
@@ -213,3 +212,6 @@ if __name__ == '__main__':
                               temp_keys['aws_session_token']))
     else:
         execute_command(role_profile, command)
+
+if __name__ == '__main__':
+    main()
