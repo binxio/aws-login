@@ -18,7 +18,7 @@ setup(
     name = 'aws-login',
     packages = ['aws_login'],
     entry_points = {
-        'console_scripts': ['aws-login = aws_login:main']
+        'console_scripts': ['aws-login = aws_login.aws_login:main']
         },
     version = version,
     description = 'AWS login using the Secure Token Service',
@@ -26,7 +26,7 @@ setup(
     include_package_data=True,
     zip_safe=False,
     platforms='any',
-    install_requires=['boto3', 'requests'],
+    install_requires=['boto3', 'requests', 'configparser'],
     author = 'Martijn van Dongen',
     author_email = 'martijnvandongen@binx.io',
     url = 'https://github.com/binxio/aws-login',
