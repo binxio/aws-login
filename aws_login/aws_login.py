@@ -5,81 +5,292 @@ import boto3
 import json
 import requests
 import argparse
+import click
 import configparser
 from botocore.exceptions import ClientError
 import subprocess
 from datetime import datetime
 
 
-def execute_command(role, command):
-    if "--profile" in command:
-        print("ERROR: the command should NOT contain --profile, remove it and try again")
-        exit(1)
-    command = command+" --profile " + role 
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=None, shell=True)
+class AWSLogin(object):
+
+    def __init__(self, verbose=False):
+        self.verbose = verbose
+        self._sts = None
+        self._iam = None
+        self.profile = None
+        self.login_profile = None
+        self.login_credentials = {}
+        self.mfa_expiration = 3600
+        self.role_expiration = 900
+        self.console_expiration = 900
+        self.token = None
+
+    def read_login_credentials(self):
+        self.login_credentials = read_credentials(self.login_profile, self.verbose)
+        if len(self.login_credentials) == 0:
+            sys.stderr.write('ERROR: no credentials found in profile "{}"'.format(self.login_credentials))
+            sys.exit(1)
+
+    @property
+    def sts(self):
+        if self._sts is None:
+            creds = self.login_credentials
+            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
+                      'aws_secret_access_key': creds['aws_secret_access_key']}
+
+            if 'aws_session_token' in creds:
+                kwargs['aws_session_token'] = creds['aws_session_token']
+
+            self._sts = boto3.client('sts', **kwargs)
+        return self._sts
+
+    @property
+    def iam(self):
+        if self._iam is None:
+            creds = self.login_credentials
+            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
+                      'aws_secret_access_key': creds['aws_secret_access_key']}
+
+            if 'aws_session_token' in creds:
+                kwargs['aws_session_token'] = creds['aws_session_token']
+
+            self._iam = boto3.client('iam', **kwargs)
+        return self._iam
+
+    def get_account_id(self):
+        """ returns the account id associated with the login """
+        response = self.sts.get_caller_identity()
+        return response['Account']
+
+    def get_username(self):
+        """ returns the username associated with the login """
+        response = self.sts.get_caller_identity()
+        self.username = response['Arn'].split('/')[1]
+        return self.username
+
+    def get_mfa_serial_number(self):
+        """ returns the mfa serial number associated with the login """
+        username = self.get_username()
+        response = self.iam.list_mfa_devices(UserName=username)
+        devices = response['MFADevices']
+        if len(devices) > 0:
+            self.mfa_serial_number = response['MFADevices'][0]['SerialNumber']
+            if (len(devices) > 1):
+                sys.stderr.write('WARN: multiple MFA device found for user "{}", using first.'.format(username))
+        else:
+            sys.stderr.write('ERROR: no MFA device found for user "{}"'.format(username))
+            sys.exit(1)
+        return self.mfa_serial_number
+
+    def assume_role_credentials(self, role, account_id):
+        credentials = read_credentials(self.profile, self.verbose)
+        expired = profile_expired(credentials)
+
+        if role is not None:
+            if account_id is None:
+                account_id = self.get_account_id()
+            role_arn = 'arn:aws:iam::%s:role/%s' % (account_id, role)
+            expired = True
+        else:
+            if 'role_arn' in credentials:
+                role_arn = credentials.get('role_arn')
+            else:
+                sys.stderr.write('INFO: no role specified. please specify --role and --account-id\n')
+                return
+
+        if expired:
+            response = self.sts.assume_role(
+                RoleArn=role_arn,
+                RoleSessionName='{}-{}'.format(self.get_username(), self.profile),
+                DurationSeconds=3600
+            )
+            write_credentials(self.profile, response['Credentials'], role_arn, self.login_profile + '_mfa')
+            if self.verbose:
+                sys.stderr.write('INFO: refreshed credentials for "{}"\n'.format(self.profile))
+        else:
+            if self.verbose:
+                sys.stderr.write('INFO: credentials for "{}" are still valid\n'.format(self.profile))
+
+    def check_and_set_mfa_session(self):
+
+        mfa_profile = self.login_profile + '_mfa'
+        creds = read_credentials(mfa_profile, self.verbose)
+
+        if profile_expired(creds):
+            serial_number = self.get_mfa_serial_number()
+            token_code = input("Enter MFA Token Code: ")
+            response = self.sts.get_session_token(
+                DurationSeconds=self.mfa_expiration,
+                SerialNumber=serial_number,
+                TokenCode=str(token_code)
+            )
+            write_credentials(mfa_profile, response['Credentials'])
+            if self.verbose:
+                sys.stderr.write('INFO: refreshed credentials for "{}" in "{}"\n'.format(self.login_profile, mfa_profile))
+        else:
+            if self.verbose:
+                sys.stderr.write('INFO: credentials for "{}" in "{}" are still valid\n'.format(self.login_profile, mfa_profile))
+
+    def generate_magic_link(self):
+        profile = read_credentials(self.profile,  self.verbose)
+        role_arn = profile['role_arn']
+        token = self.token if self.token is not None else input("Enter MFA Token Code:")
+
+        username = self.get_username()
+        mfa_arn = self.get_mfa_serial_number()
+
+        response = self.sts.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName='{}-{}'.format(username, self.profile),
+            DurationSeconds=self.role_expiration,
+            SerialNumber=mfa_arn,
+            TokenCode=str(token)
+        )
+
+        credentials = response['Credentials']
+
+        session = json.dumps({'sessionId': credentials['AccessKeyId'],
+                              'sessionKey': credentials['SecretAccessKey'],
+                              'sessionToken': credentials['SessionToken']})
+
+        r = requests.get("https://signin.aws.amazon.com/federation",
+                         params={'Action': 'getSigninToken',
+                                 'SessionDuration': self.console_expiration,
+                                 'Session': session})
+        signin_token = r.json()
+
+        console = requests.Request('GET',
+                                   'https://signin.aws.amazon.com/federation',
+                                   params={'Action': 'login',
+                                           'Issuer': 'aws-login',
+                                           'Destination': 'https://console.aws.amazon.com/',
+                                           'SigninToken': signin_token['SigninToken']})
+        prepared_link = console.prepare()
+        return prepared_link.url
+
+    def show_keys(self):
+        creds = read_credentials(self.profile,  self.verbose)
+        sys.stdout.write('export AWS_ACCESS_KEY_ID={}\n'.format(creds['aws_access_key_id']))
+        sys.stdout.write('export AWS_SECRET_ACCESS_KEY={}\n'.format(creds['aws_secret_access_key']))
+        if 'aws_session_token' in creds:
+            sys.stdout.write('export AWS_SESSION_TOKEN="{}"\n'.format(creds['aws_session_token']))
+        else:
+            sys.stdout.write('unset AWS_SESSION_TOKEN\n')
+
+
+@click.command()
+@click.option('--login-profile', '-l', help='to use to login to AWS')
+@click.option('--profile', '-p', help='to update the AWS access credentials for, defaults to $AWS_DEFAULT_PROFILE')
+@click.option('--role', '-r', help='to assume in the account.')
+@click.option('--account-id', '-a', help='to assume to role in. If specified, --role is required.')
+@click.option('--console', '-c', is_flag=True, default=False, help='open AWS management console.')
+@click.option('--keys', '-k', is_flag=True, default=False, help='show keys as environment variables.')
+@click.option('--magic-link', '-m', is_flag=True, default=False, help='show link to AWS management console.')
+@click.option('--verbose', '-v', is_flag=True, default=False, help='show verbose output.')
+@click.option('--mfa-expiration', '-E', type=click.INT, default=3600,
+              help='number of seconds after which the MFA credentials are no longer valid')
+@click.option('--role-expiration', '-R', type=click.INT, default=900,
+              help='number of seconds after which the role credentials are no longer valid')
+@click.option('--console-expiration', '-C', type=click.INT, default=900,
+              help='number of seconds after which the console credentials are no longer valid')
+@click.option('--token', '-t', help='from your MFA device')
+@click.argument('args', nargs=-1)
+def main(
+        login_profile, profile, role, account_id, console, magic_link, keys, verbose, mfa_expiration, role_expiration,
+        console_expiration, token, args):
+    """
+    single sign-on login using MFA, role based access and the secure token service.
+
+    """
+    if login_profile is None:
+        login_profile = os.getenv('AWS_DEFAULT_LOGIN_PROFILE', 'login')
+
+    if profile is None:
+        if len(args) > 0:
+            profile = args[0]
+            args = args[1:]
+        else:
+            profile = os.getenv('AWS_DEFAULT_PROFILE', 'default')
+
+    if profile == login_profile:
+        sys.stderr.write('ERROR: --profile and --login-profile must be different\n')
+        sys.exit(1)
+
+    try:
+        login = AWSLogin(verbose=verbose)
+
+        login.mfa_expiration = mfa_expiration
+        login.role_expiration = role_expiration
+        login.console_expiration = console_expiration
+        login.token = token
+        login.profile = profile
+        login.login_profile = login_profile
+
+        login.read_login_credentials()
+        login.check_and_set_mfa_session()
+        login.assume_role_credentials(role, account_id)
+
+    except ClientError as e:
+        sys.stderr.write('{}'.format(e))
+        sys.exit(1)
+
+    if console or magic_link:
+        link = login.generate_magic_link()
+        if magic_link:
+            sys.stdout.write('{}\n'.format(link))
+        if console:
+            chrome(link)
+
+    if keys:
+        login.show_keys()
+
+    if len(args) > 0:
+        execute_command(profile, list(args))
+
+
+def execute_command(profile, command):
+    env = os.environ.copy()
+    env['AWS_DEFAULT_PROFILE'] = profile
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     output = process.communicate()
-    print(output[0].decode())
+    sys.stdout.write(output[0].decode())
+    sys.stdout.write(output[1].decode())
+    if process.returncode != 0:
+        sys.exit(process.returncode)
 
 
 def chrome(link):
-    command = '/usr/bin/open -a "/Applications/Google Chrome.app" "' + link + '"'
+    command = '/usr/bin/open "' + link + '"'
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=None, shell=True)
     output = process.communicate()
 
 
-def assume_role_credentials(mfa_profile, role_profile):
-    
-    mfa_ak = read_credentials(mfa_profile)
-    rba_ak = read_rba_config(role_profile)
-
-    roleArn = 'arn:aws:iam::%s:role/%s' % (rba_ak['account_id'],
-                                           rba_ak['role'])
-
-    client = boto3.client(
-        'sts',
-        aws_access_key_id=mfa_ak['aws_access_key_id'],
-        aws_secret_access_key=mfa_ak['aws_secret_access_key'],
-        aws_session_token=mfa_ak['aws_session_token']
-    )
-    
-    response = client.assume_role(
-        RoleArn=roleArn,
-        RoleSessionName=role_profile,
-        DurationSeconds=3600
-    )
-    write_credentials(role_profile, response['Credentials'])
-
-
-def read_rba_config(rba_config):
-    filename = os.path.expanduser('~/.rba_config')
-    if not os.path.isfile(filename):
-        print("ERROR: ~/.rba_config does not exist")
-        exit(1)
-    config = configparser.ConfigParser()
-    config.read(filename)
-
-    if rba_config in config.sections():
-        return config[rba_config]
-    else:
-        print("ERROR: profile not found in ~/.rba_config: " + rba_config)
-        exit(1)
-
-
-def read_credentials(profile):
+def read_credentials(profile, verbose=False):
     filename = os.path.expanduser('~/.aws/credentials')
     if not os.path.isfile(filename):
         print("ERROR: ~/.aws/credentials does not exist")
-        exit(1)
+        sys.exit(1)
+
     config = configparser.ConfigParser()
     config.read(filename)
     if profile in config.sections():
         return config[profile]
     else:
-        print("INFO: profile not found in ~/.aws/credentials: " + profile)
-        return []
+        if verbose:
+            sys.stderr.write('INFO: profile "{}" not found in ~/.aws/credentials: '.format(profile))
+        return {}
 
 
-def write_credentials(profile, credentials):
+def profile_expired(credentials):
+    if 'expiration' in credentials:
+        expiration = datetime.strptime(credentials['expiration'], '%Y-%m-%d %H:%M')
+        return datetime.utcnow() >= expiration
+    else:
+        return True
+
+
+def write_credentials(profile, credentials, role_arn=None, source_profile=None):
     filename = os.path.expanduser('~/.aws/credentials')
     dirname = os.path.dirname(filename)
 
@@ -93,125 +304,23 @@ def write_credentials(profile, credentials):
     config.set(profile, 'aws_access_key_id', credentials['AccessKeyId'])
     config.set(profile, 'aws_secret_access_key', credentials['SecretAccessKey'])
     config.set(profile, 'aws_session_token', credentials['SessionToken'])
-    config.set(profile, 'expiration', credentials['Expiration'].strftime('%Y-%m-%d %H:%M'))
+
+    if role_arn is not None:
+        config.set(profile, 'role_arn', role_arn)
+
+    if 'Expiration' in credentials:
+        config.set(profile, 'expiration', credentials['Expiration'].strftime('%Y-%m-%d %H:%M'))
+    elif 'expiration' in config:
+        del config['expiration']
+
+    if source_profile is not None:
+        config.set(profile, 'source_profile', source_profile)
+    elif 'source_profile' in config:
+        del config['expiration']
 
     with open(filename, 'w') as fp:
         config.write(fp)
 
-
-def check_and_set_mfa_session(profile):
-
-    mfa_profile = profile+'_mfa'
-    mfa_ak = read_credentials(profile+'_mfa')
-    
-    if 'expiration' in mfa_ak:
-        expiration = datetime.strptime(mfa_ak['expiration'], '%Y-%m-%d %H:%M')
-    else:
-        expiration = datetime.utcnow()
-    
-    profile_ak = read_credentials(profile)
-
-    if datetime.utcnow() >= expiration:
-        client = boto3.client(
-            'sts',
-            aws_access_key_id=profile_ak['aws_access_key_id'],
-            aws_secret_access_key=profile_ak['aws_secret_access_key']    
-        )
-        caller_id = client.get_caller_identity()
-        mfa_arn = caller_id['Arn'].replace("user", "mfa")
-        token_code = input("Enter MFA Token Code: ")
-        
-        response = client.get_session_token(
-            DurationSeconds=86400,
-            SerialNumber=mfa_arn,
-            TokenCode=token_code
-        )
-        write_credentials(mfa_profile, response['Credentials'])
-
-
-def generate_magic_link(profile, role_profile):
-
-    profile_ak = read_credentials(profile)
-    rba = read_rba_config(role_profile)
-
-    roleArn = 'arn:aws:iam::%s:role/%s' % (rba['account_id'],
-                                           rba['role'])
-
-    token_code = input("Enter MFA Token Code: ")
-
-    client = boto3.client(
-        'sts',
-        aws_access_key_id=profile_ak['aws_access_key_id'],
-        aws_secret_access_key=profile_ak['aws_secret_access_key']
-    )
-    caller_id = client.get_caller_identity()
-    mfa_arn = caller_id['Arn'].replace("user", "mfa")
-
-    response = client.assume_role(
-        RoleArn=roleArn,
-        RoleSessionName=role_profile,
-        DurationSeconds=3600,
-        SerialNumber=mfa_arn,
-        TokenCode=token_code
-    )
-
-    credentials = response['Credentials']
-
-    session = json.dumps({'sessionId': credentials['AccessKeyId'],
-                          'sessionKey': credentials['SecretAccessKey'],
-                          'sessionToken': credentials['SessionToken']})
-    
-    r = requests.get("https://signin.aws.amazon.com/federation",
-                     params={'Action': 'getSigninToken',
-                             'SessionDuration': 43200,
-                             'Session': session})
-    signin_token = r.json()
-
-    console = requests.Request('GET',
-                               'https://signin.aws.amazon.com/federation',
-                               params={'Action': 'login',
-                                       'Issuer': 'Instruqt',
-                                       'Destination': 'https://console.aws.amazon.com/',
-                                       'SigninToken': signin_token['SigninToken']})
-    prepared_link = console.prepare()
-    return prepared_link.url
-
-
-def main():
-    if len(sys.argv) > 1:
-        role_profile = sys.argv[1]
-        command = ' '.join(sys.argv[2:])
-    else:
-        print("Use: ./aws-login rba_profile [command]")
-        print("Example: ./aws-login admin@prod aws sts get-caller-identity")
-        print("Example: ./aws-login admin@prod mc")
-        print("Example: ./aws-login admin@prod keys")
-        print("Example: ./aws-login admin@prod")
-        exit(1)
-
-    if "AWS_LOGIN_PROFILE" not in os.environ:
-        profile = input("AWS_LOGIN_PROFILE not set, please enter the profile: ")
-    else:
-        profile = os.environ['AWS_LOGIN_PROFILE']
-
-    mfa_profile = profile+'_mfa'
-    check_and_set_mfa_session(profile)
-    assume_role_credentials(mfa_profile, role_profile)
-    if len(sys.argv) == 2:
-        print('INFO: Session refreshed')
-    elif sys.argv[2] == 'mc':
-        link = generate_magic_link(profile, role_profile)
-        chrome(link)
-    elif sys.argv[2] == 'keys':
-        temp_keys = read_credentials(role_profile)
-        template = ('AWS_ACCESS_KEY_ID={} '
-                    'AWS_SECRET_ACCESS_KEY={} '
-                    'AWS_SESSION_TOKEN={} ')
-        print(template.format(temp_keys['aws_access_key_id'],
-                              temp_keys['aws_secret_access_key'],
-                              temp_keys['aws_session_token']))
-    else:
-        execute_command(role_profile, command)
 
 if __name__ == '__main__':
     main()
