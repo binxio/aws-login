@@ -29,7 +29,7 @@ class AWSLogin(object):
     def read_login_credentials(self):
         self.login_credentials = read_credentials(self.login_profile, self.verbose)
         if len(self.login_credentials) == 0:
-            sys.stderr.write('ERROR: no credentials found in profile "{}"'.format(self.login_credentials))
+            sys.stderr.write('ERROR: no credentials found in profile "{}"\n'.format(self.login_profile))
             sys.exit(1)
 
     @property
