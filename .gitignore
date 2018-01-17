@@ -1,3 +1,10 @@
-terraform.tfstate
-terraform.tfstate.backup
-.terraform
+*.pyc
+.cache/
+
+dist/
+build/
+*.egg-info/
+
+.tox/
+.coverage
+tags
