@@ -2,117 +2,94 @@
 
 Things might break, are not fully tested, refactoring should happen, features should be added.
 
-# AWS Login for Role Based Access in AWS
+# Intro
 
-This tool could be used to secure and automate the execution of aws cli.
-
-## Usage
-
-```
-./aws-login admin@prod aws sts get-caller-identity
-AWS_LOGIN_PROFILE not set, please enter the profile: mypersonalprofile
-Enter MFA Token Code: 123456
-{
-    "Account": "1234567890",
-    "UserId": "AELWEHRWJKEHRLKWERHLWEK:admin@prod",
-    "Arn": "arn:aws:sts::1234567890:assumed-role/testRole/admin@prod"
-}
-```
-
-## Prepare your account
-
-Deploy the terraform stack, which is a test role which can only be assumed with an MFA session. You need to have a profile in ~/.aws/credentials with sufficient permissions to deploy.
+This tool helps to easily start MFA sessions for AWS CLI, easily use Role Based Access in AWS CLI and easily open the Management Console of AWS from the command line.
+# Installation
 
 ```
-terraform init
-terraform apply
+pip install awscli aws-login --upgrade
 ```
 
-## Create ~/.rba_config
+# Usage
 
-Create `~/.rba_config and add the role you just created with terraform, or manually.
-
-```
-[test@prod]
-account_id = 123123123123
-role = testRole
-```
-
-## Set wrapper profile
+## Help
 
 ```
-export AWS_LOGIN_PROFILE=mypersonalprofile
+Usage: aws_login [OPTIONS] ACTION
+
+  Aws-login is an AWS Helper CLI for using Role Based Access, easy and
+  securly open the management console with the command line.
+
+  Actions:
+
+  aws-login start-mfa-session, aws-login mfa
+
+  aws-login add-profile, aws-login add
+
+  aws-login open-console, aws-login oc
+
+  aws-login print-console, aws-login pc
+
+Options:
+  -s, --source-profile TEXT       The source profile.
+  -t, --target-profile TEXT       The target profile.
+  -r, --role TEXT                 The role to assume
+  -a, --account-id TEXT           Account ID to assume the role
+  -v, --verbose                   show verbose output.
+  -p, --profile TEXT              Use this profile for mfa session or opening
+                                  console.
+  -E, --mfa-expiration INTEGER    number of seconds after which the MFA
+                                  credentials are no longer valid
+  -R, --role-expiration INTEGER   number of seconds after which the role
+                                  credentials are no longer valid
+  -C, --console-expiration INTEGER
+                                  number of seconds after which the console
+                                  credentials are no longer valid
+  -T, --token TEXT                from your MFA device
+  -h, --help                      Show this message and exit.
 ```
 
-## Make an alias
+## Start an MFA Session
+
+In this example the profile 'werner' is added with `aws configure --profile werner`.
 
 ```
-alias aws-login='./aws-login'
+$ aws-login start-mfa-session --profile werner
+Enter MFA code for arn:aws:iam:: 123123123123:mfa/werner: 123456
+$ aws s3 mb s3://testbucketbywerner --profile werner_mfa
+make_bucket: testbucketbywerner
 ```
 
-## Try some commands
+## Add profile for RBA
 
-Check your identity:
+$ aws-login add-profile --source-profile werner \
+                        --target-profile admin@prod \
+                        --account-id 123123123123 \
+                        --role admin
+INFO: now use --profile admin@prod in future aws cli commands
 
-```
-aws-login test@prod aws sts get-caller-identity
-{
-    "Account": "1234567890",
-    "UserId": "AELWEHRWJKEHRLKWERHLWEK:admin@prod",
-    "Arn": "arn:aws:sts::1234567890:assumed-role/testRole/admin@prod"
-}
-```
+$ aws s3 ls --profile admin@prod
+Enter MFA code for arn:aws:iam:: 123123123123:mfa/werner: 123456
+this-bucket-is-production
+this-bucket-is-production-too
 
-Show your buckets:
-
-```
-aws-login test@prod aws s3 ls
-2018-01-09 10:48:12 thiscouldbeoneofyourbuckets
-```
-
-You'll get an error if you don't have access:
+## Open the Management Console
 
 ```
-aws-login test@prod aws ec2 describe-instances --region eu-west-1
-An error occurred (UnauthorizedOperation) when calling the DescribeInstances operation: You are not authorized to perform this operation.
+$ aws-login open-console --profile admin@prod
+Enter MFA code for arn:aws:iam:: 123123123123:mfa/werner: 123456
+(opens the default browser with a magic link, immediately logged in)
 ```
 
-Open chrome with the management console. This is work in progress, as it currently only support Chrome on a Mac. It also requires a new MFA session.
+## Shortcuts
+
+If you don't like typing, these commands are helpful:
 
 ```
-aws-login test@prod mc
-Enter MFA Token Code: 123456
+$ alias awsl='aws-login'
+$ awsl oc -p readonly@prod
+$ awsl mfa -p admin@dev
+$ awsl ap -s <> -t <> -a <> -r <>
 ```
 
-And just refresh the session for example. Best practice here is that your personal account has no access, except to assume a role with MFA required. Your software running locally, uses the AWS credentials profile: developer@dev. After the refresh is done, it has the exact permissions for a limited amount of time. Abuse of access keys is limited to the max.
-
-```
-aws-login developer@dev
-Enter MFA Token Code: 123456
-Session refreshed
-```
-
-You could also generate the keys and export them to use in all next commands. 
-
-```
-aws-login test@prod keys
-AWS_ACCESS_KEY_ID=ASDSFSDFSDFSDFSDFSDF 
-AWS_SECRET_ACCESS_KEY=DSGSDGSDGFSDFSDFSDFSDFSDFSDF 
-AWS_SESSION_TOKEN=DFSDFSDFSDFSDFSDFSDFSDFSDF
-```
-
-Make sure your session is not expired.
-
-```
-aws-login test@prod
-Enter MFA Token Code: 123456
-export $(./aws-login test@prod keys)
-aws sts get-caller-identity
-{
-    "Account": "1234567890",
-    "UserId": "AELWEHRWJKEHRLKWERHLWEK:test@prod",
-    "Arn": "arn:aws:sts::1234567890:assumed-role/testRole/admin@prod"
-}
-eval $(aws-login test@prod keys) aws s3 ls
-2018-01-09 10:48:12 thiscouldbeoneofyourbuckets
-```

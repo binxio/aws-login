@@ -3,22 +3,29 @@ A simple command line utility to login to AWS accounts using role based access a
 
 **Options**
 
-Usage: aws-login [OPTIONS] [ARGS]...
+Usage: aws_login [OPTIONS] ACTION
 
-  single sign-on login using MFA, role based access and the secure token
-  service.
+  Aws-login is an AWS Helper CLI for using Role Based Access, easy and
+  securly open the management console with the command line.
+
+  Actions:
+
+  aws-login start-mfa-session, aws-login mfa
+
+  aws-login add-profile, aws-login add
+
+  aws-login open-console, aws-login oc
+
+  aws-login print-console, aws-login pc
 
 Options:
-  -l, --login-profile TEXT        to use to login to AWS
-  -p, --profile TEXT              to update the AWS access credentials for,
-                                  defaults to $AWS_DEFAULT_PROFILE
-  -r, --role TEXT                 to assume in the account.
-  -a, --account-id TEXT           to assume to role in. If specified, --role
-                                  is required.
-  -c, --console                   open AWS management console.
-  -k, --keys                      show keys as environment variables.
-  -m, --magic-link                show link to AWS management console.
+  -s, --source-profile TEXT       The source profile.
+  -t, --target-profile TEXT       The target profile.
+  -r, --role TEXT                 The role to assume
+  -a, --account-id TEXT           Account ID to assume the role
   -v, --verbose                   show verbose output.
+  -p, --profile TEXT              Use this profile for mfa session or opening
+                                  console.
   -E, --mfa-expiration INTEGER    number of seconds after which the MFA
                                   credentials are no longer valid
   -R, --role-expiration INTEGER   number of seconds after which the role
@@ -26,11 +33,11 @@ Options:
   -C, --console-expiration INTEGER
                                   number of seconds after which the console
                                   credentials are no longer valid
-  -t, --token TEXT                from your MFA device
-  --help                          Show this message and exit.
-
-
+  -T, --token TEXT                from your MFA device
+  -h, --help                      Show this message and exit.
 
 **Example**
+
+
 
 

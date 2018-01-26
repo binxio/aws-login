@@ -7,162 +7,227 @@ import requests
 import argparse
 import click
 import configparser
+from getpass import getpass
 from botocore.exceptions import ClientError
 import subprocess
 from datetime import datetime
+
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
+
+
+@click.command(context_settings=CONTEXT_SETTINGS)
+@click.argument('action', type=click.Choice(['start-mfa-session',
+                                             'print-console',
+                                             'open-console',
+                                             'add-profile',
+                                             'add',
+                                             'mfa',
+                                             'oc',
+                                             'pc']))
+@click.option('--source-profile', '-s', help='The source profile.')
+@click.option('--target-profile', '-t', help='The target profile.')
+@click.option('--role', '-r', help='The role to assume')
+@click.option('--account-id', '-a', help='Account ID to assume the role')
+@click.option('--verbose', '-v', is_flag=True, default=False, help='show verbose output.')
+@click.option('--profile', '-p', help='Use this profile for mfa session or opening console.')
+@click.option('--mfa-expiration', '-E', type=click.INT, default=3600,
+              help='number of seconds after which the MFA credentials are no longer valid')
+@click.option('--role-expiration', '-R', type=click.INT, default=900,
+              help='number of seconds after which the role credentials are no longer valid')
+@click.option('--console-expiration', '-C', type=click.INT, default=900,
+              help='number of seconds after which the console credentials are no longer valid')
+@click.option('--token', '-T', help='from your MFA device')
+def main(action, source_profile, target_profile, role, account_id,
+         verbose, mfa_expiration, role_expiration, profile,
+         console_expiration, token):
+    """
+    Aws-login is an AWS Helper CLI for using Role Based Access, easy
+    and securly open the management console with the command line.
+
+    Actions:\n
+    aws-login start-mfa-session, aws-login mfa\n
+    aws-login add-profile, aws-login add\n
+    aws-login open-console, aws-login oc\n
+    aws-login print-console, aws-login pc\n
+    """
+    if verbose:
+          sys.stderr.write('INFO: Action is {}\n'.format(action))
+
+    """
+    If --profile is given, and --source-profile or --target-profile
+    is not given, source and target will be set to the --profile
+    this is because the aws cli also uses --profile for similar
+    actions. Therefore it's logical to use --profile.
+    """
+    if action in ['start-mfa-session', 'open-console', 'print-console',
+                  'mfa', 'oc', 'pc']:
+        if source_profile is None and profile is not None:
+            source_profile = profile
+        if target_profile is None and profile is not None:
+            target_profile = profile
+
+    """ Now set all the parameters in the object login """
+    login = AWSLogin()
+    login.mfa_expiration = mfa_expiration
+    login.role_expiration = role_expiration
+    login.console_expiration = console_expiration
+    login.token = token
+    login.source_profile = source_profile
+    login.target_profile = target_profile
+    login.role = role
+    login.account_id = account_id
+
+    if action in ['start-mfa-session', 'mfa']:
+        login.start_mfa_session()
+    elif action in ['open-console', 'oc']:
+        login.open_magic_link()
+    elif action in ['print-console', 'pc']:
+        login.print_magic_link()
+    elif action in ['add-profile', 'add']:
+        if (role is not None and
+            source_profile is not None and
+            account_id is not None and
+            target_profile is not None):
+                login.add_profile()
+        else:
+            print('ERROR: "aws-login add-profile" requires --source-profile, --target-profile, --role and --account-id')
+            exit(1)
 
 
 class AWSLogin(object):
 
     def __init__(self, verbose=False):
+        """
+        Aws-login is an AWS Helper CLI for using Role Based Access, easy
+        and securly open the management console with the command line.
+        """
+        self.aws_credentials = '~/.aws/credentials'
+        self.aws_config = '~/.aws/config'
         self.verbose = verbose
-        self._sts = None
-        self._iam = None
-        self.profile = None
-        self.login_profile = None
-        self.login_credentials = {}
+        self.role = None
+        self.account_id = None
+        self.source_profile = None
+        self.target_profile = None
         self.mfa_expiration = 3600
-        self.role_expiration = 900
-        self.console_expiration = 900
+        self.role_expiration = 3600
+        self.console_expiration = 3600
         self.token = None
 
-    def read_login_credentials(self):
-        if self.login_profile == 'login' and self.profile != 'default':
-            saved_login_profile = read_credentials(self.profile, self.verbose)
-            self.login_profile = saved_login_profile['source_profile']
-        self.login_credentials = read_credentials(self.login_profile, self.verbose)
-        if len(self.login_credentials) == 0:
-            sys.stderr.write('ERROR: no credentials found in profile "{}"\n'.format(self.login_profile))
-            sys.exit(1)
+    def start_mfa_session(self):
+        """
+        This function starts an mfa session and writes the access keys
+        to the credentials file of boto3 and aws cli are using so they
+        can be used natively in future commands. In case the current
+        session is not expired, the old one is reused (saves typing 
+        the MFA. Shorter expiration is more secure though.)
+        """
 
-    @property
-    def sts(self):
-        if self._sts is None:
-            creds = self.login_credentials
-            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
-                      'aws_secret_access_key': creds['aws_secret_access_key']}
+        self.start_aws_connections()
 
-            if 'aws_session_token' in creds:
-                kwargs['aws_session_token'] = creds['aws_session_token']
+        """
+        If --profile is given, and/or --source-profile and 
+        --target-profile are identical, the target profile is
+        overwritten with the default _mfa suffix.
+        """
+        if self.source_profile == self.target_profile:
+            self.target_profile = self.source_profile + '_mfa'
 
-            self._sts = boto3.client('sts', **kwargs)
-        return self._sts
+        creds = get_section(self.aws_credentials, self.source_profile)
 
-    @property
-    def iam(self):
-        if self._iam is None:
-            creds = self.login_credentials
-            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
-                      'aws_secret_access_key': creds['aws_secret_access_key']}
+        if 'aws_access_key_id' not in creds:
+            print("ERROR: Profile {} not found.".format(self.source_profile))
+            exit(1)
 
-            if 'aws_session_token' in creds:
-                kwargs['aws_session_token'] = creds['aws_session_token']
+        target_creds = get_section(self.aws_credentials, self.target_profile)
 
-            self._iam = boto3.client('iam', **kwargs)
-        return self._iam
+        if profile_expired(target_creds):
+            mfa_serial = self.get_mfa_serial()
+            self.ask_user_for_token(mfa_serial)
 
-    def get_account_id(self):
-        """ returns the account id associated with the login """
-        response = self.sts.get_caller_identity()
-        return response['Account']
+            try:
+                response = self.sts.get_session_token(
+                    DurationSeconds=self.mfa_expiration,
+                    SerialNumber=mfa_serial,
+                    TokenCode=str(token)
+                )
+            except ClientError as e:
+                print("ERROR: {}".format(e))
+                exit(1)
 
-    def get_username(self):
-        """ returns the username associated with the login """
-        response = self.sts.get_caller_identity()
-        self.username = response['Arn'].split('/')[1]
-        return self.username
-
-    def get_mfa_serial_number(self):
-        """ returns the mfa serial number associated with the login """
-        username = self.get_username()
-        response = self.iam.list_mfa_devices(UserName=username)
-        devices = response['MFADevices']
-        if len(devices) > 0:
-            self.mfa_serial_number = response['MFADevices'][0]['SerialNumber']
-            if (len(devices) > 1):
-                sys.stderr.write('WARN: multiple MFA device found for user "{}", using first.'.format(username))
+            credentials = response['Credentials']
+            session = {
+                'aws_access_key_id': credentials['AccessKeyId'],
+                'aws_secret_access_key': credentials['SecretAccessKey'],
+                'aws_session_token': credentials['SessionToken'],
+                'expiration': credentials['Expiration']
+            }
+            set_credentials_section(self.aws_credentials,
+                                    self.target_profile,
+                                    **session)
         else:
-            sys.stderr.write('ERROR: no MFA device found for user "{}"'.format(username))
-            sys.exit(1)
-        return self.mfa_serial_number
+            warning = 'INFO: Profile {} is not expired.'
+            print(warning.format(self.target_profile))
 
-    def assume_role_credentials(self, role, account_id):
-        credentials = read_credentials(self.profile, self.verbose)
-        expired = profile_expired(credentials)
+    def get_magic_link(self):
+        """
+        This script generates a magic link to access the
+        management console without having to go through the
+        regular login procedure which takes a couple of seconds
+        """
+        if (self.source_profile is not None and
+            self.account_id is not None and
+            self.role is not None and
+            self.target_profile is None):
 
-        if role is not None:
-            if account_id is None:
-                account_id = self.get_account_id()
-            role_arn = 'arn:aws:iam::%s:role/%s' % (account_id, role)
-            expired = True
+                creds = get_section(self.aws_credentials, self.source_profile)
+                if 'expiration' in creds:
+                    message = ("ERROR: Specified Profile {} is an MFA session. "
+                               "Use the origin.")
+                    print(message.format(self.source_profile))
+                    exit(1)
+
+                self.start_aws_connections()
+                username = self.get_username()
+                mfa_serial = self.get_mfa_serial()
+                arn_tmpl = 'arn:aws:iam::{}:role/{}'
+                role_arn = arn_tmpl.format(self.account_id, self.role)
+                session_name = '{}-{}'.format(username, self.role)
+        elif (self.target_profile is not None and
+              self.account_id is None and
+              self.role is None):
+                    configsection = get_section(self.aws_config,
+                                                'profile ' + self.target_profile)
+                    if 'role_arn' not in configsection:
+                        message = "ERROR: Profile {} not found."
+                        print(message.format(self.target_profile))
+                        exit(1)
+
+                    self.source_profile = configsection['source_profile']
+                    self.start_aws_connections()
+                    session_name = '{}'.format(self.target_profile)
+                    mfa_serial = configsection['mfa_serial']
+                    role_arn = configsection['role_arn']
         else:
-            if 'assume_role_arn' in credentials:
-                role_arn = credentials.get('assume_role_arn')
-            else:
-                sys.stderr.write('INFO: no role specified. please specify --role and --account-id\n')
-                return
+            print('The given combination of parameters is not valid.')
+            print('The following combination of parameters are allowed:')
+            print('aws-login open-console -p profile')
+            print('aws-login open-console -t profile')
+            print('aws-login open-console -s source_profile -a 123123 -r admin')
+            exit(1)
 
-        if expired:
-            #TODO: We need to establish a sts client with MFA session keys!
-            creds = read_credentials(self.login_profile + '_mfa', self.verbose)
-            kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
-                      'aws_secret_access_key': creds['aws_secret_access_key'],
-                      'aws_session_token': creds['aws_session_token']}
-            sts = boto3.client('sts', **kwargs)
-            response = sts.assume_role(
+        self.ask_user_for_token(mfa_serial)
+
+        try:
+            response = self.sts.assume_role(
                 RoleArn=role_arn,
-                RoleSessionName='{}-{}'.format(self.get_username(), self.profile),
-                DurationSeconds=3600
+                RoleSessionName=session_name,
+                DurationSeconds=self.role_expiration,
+                SerialNumber=mfa_serial,
+                TokenCode=str(token)
             )
-            write_credentials(self.profile, response['Credentials'], role_arn, self.login_profile)
-            if self.verbose:
-                sys.stderr.write('INFO: refreshed credentials for "{}"\n'.format(self.profile))
-        else:
-            if self.verbose:
-                sys.stderr.write('INFO: credentials for "{}" are still valid\n'.format(self.profile))
-
-    def check_and_set_mfa_session(self):
-
-        mfa_profile = self.login_profile + '_mfa'
-        creds = read_credentials(mfa_profile, self.verbose)
-
-        if profile_expired(creds):
-            serial_number = self.get_mfa_serial_number()
-            token_code = input("Enter MFA Token Code: ")
-            response = self.sts.get_session_token(
-                DurationSeconds=self.mfa_expiration,
-                SerialNumber=serial_number,
-                TokenCode=str(token_code)
-            )
-            write_credentials(mfa_profile, response['Credentials'])
-            if self.verbose:
-                sys.stderr.write('INFO: refreshed credentials for "{}" in "{}"\n'.format(self.login_profile, mfa_profile))
-        else:
-            if self.verbose:
-                sys.stderr.write('INFO: credentials for "{}" in "{}" are still valid\n'.format(self.login_profile, mfa_profile))
-
-    def generate_magic_link(self):
-        profile = read_credentials(self.profile,  self.verbose)
-        role_arn = profile['assume_role_arn']
-        token = self.token if self.token is not None else input("Enter MFA Token Code:")
-
-        username = self.get_username()
-        mfa_arn = self.get_mfa_serial_number()
-
-
-        #  creds = read_credentials(self.login_profile + '_mfa', self.verbose)
-        # kwargs = {'aws_access_key_id': creds['aws_access_key_id'],
-        #             'aws_secret_access_key': creds['aws_secret_access_key'],
-        #             'aws_session_token': creds['aws_session_token']}
-        # sts = boto3.client('sts', **kwargs)
-        # response = sts.assume_role(
-        response = self.sts.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName='{}-{}'.format(username, self.profile),
-            DurationSeconds=self.role_expiration,
-            SerialNumber=mfa_arn,
-            TokenCode=str(token)
-        )
+        except ClientError as e:
+            print("ERROR: {}".format(e))
+            exit(1)
 
         credentials = response['Credentials']
 
@@ -185,120 +250,176 @@ class AWSLogin(object):
         prepared_link = console.prepare()
         return prepared_link.url
 
-    def show_keys(self):
-        creds = read_credentials(self.profile,  self.verbose)
-        sys.stdout.write('export AWS_ACCESS_KEY_ID={}\n'.format(creds['aws_access_key_id']))
-        sys.stdout.write('export AWS_SECRET_ACCESS_KEY={}\n'.format(creds['aws_secret_access_key']))
-        if 'aws_session_token' in creds:
-            sys.stdout.write('export AWS_SESSION_TOKEN="{}"\n'.format(creds['aws_session_token']))
+    def print_magic_link(self):
+        """
+        This function just generates the magic link and then
+        prints it out so users can copy and paste it to their
+        favorite browser or do whatever they would like to.
+        """
+        link = self.get_magic_link()
+        print(link)
+
+    def open_magic_link(self):
+        """
+        This function generates the magic link and opens it with
+        the default open command. Mac OS will find the default browser
+        and uses this to log in.
+        """
+        link = self.get_magic_link()
+        open_link(link)
+
+    def add_profile(self):
+        """
+        This function is used to start a session using the regular
+        access keys and the token code provided. It can then be used
+        to access services which requires the condition MFA
+        """
+        self.start_aws_connections()
+        username = self.get_username()
+        mfa_serial = self.get_mfa_serial()
+        account_id = self.get_account_id()
+        arn_tmpl = 'arn:aws:iam::{}:role/{}'
+        role_arn = arn_tmpl.format(self.account_id, self.role)
+        kwargs = {
+            'role_arn': role_arn,
+            'mfa_serial': mfa_serial,
+            'source_profile': self.source_profile,
+            'external_id': self.account_id
+        }
+        set_config_section(self.aws_credentials,
+                           'profile ' + self.target_profile,
+                           **kwargs)
+        message = "INFO: now use --profile {} in future aws cli commands"
+        print(message.format(self.target_profile))
+
+    def get_account_id(self):
+        """ returns the account id associated with the login """
+        response = self.sts.get_caller_identity()
+        return response['Account']
+
+    def ask_user_for_token(self, mfa_serial):
+        """ returns the token code if valid entered by user """
+        message = "Enter MFA code for {}:".format(mfa_serial)
+        self.token if self.token is not None else getpass(message)
+        if len(self.token) != 6:
+            print("ERROR: token code is not 6 characters")
+            exit(1)
+
+    def get_username(self):
+        """ returns the username associated with the login """
+        response = self.sts.get_caller_identity()
+        username = response['Arn'].split('/')[1]
+        return username
+
+    def get_mfa_serial(self):
+        """ returns the mfa serial number associated with the login """
+        username = self.get_username()
+        response = self.iam.list_mfa_devices(UserName=username)
+        devices = response['MFADevices']
+        if len(devices) > 0:
+            self.mfa_serial_number = response['MFADevices'][0]['SerialNumber']
+            if (len(devices) > 1):
+                sys.stderr.write('WARN: multiple MFA device found for user "{}", using first.'.format(username))
         else:
-            sys.stdout.write('unset AWS_SESSION_TOKEN\n')
+            sys.stderr.write('ERROR: no MFA device found for user "{}"'.format(username))
+            sys.exit(1)
+        return self.mfa_serial_number
 
+    def start_aws_connections(self):
+        """
+        To start aws connections, source_profile must be set and access keys
+        must be valid. In case a condition of the role requires an mfa session
+        the source profile given must be an mfa session.
+        """
+        self.set_aws_client('iam')
+        self.set_aws_client('sts')
 
-@click.command()
-@click.option('--login-profile', '-l', help='to use to login to AWS')
-@click.option('--profile', '-p', help='to update the AWS access credentials for, defaults to $AWS_DEFAULT_PROFILE')
-@click.option('--role', '-r', help='to assume in the account.')
-@click.option('--account-id', '-a', help='to assume to role in. If specified, --role is required.')
-@click.option('--console', '-c', is_flag=True, default=False, help='open AWS management console.')
-@click.option('--keys', '-k', is_flag=True, default=False, help='show keys as environment variables.')
-@click.option('--magic-link', '-m', is_flag=True, default=False, help='show link to AWS management console.')
-@click.option('--verbose', '-v', is_flag=True, default=False, help='show verbose output.')
-@click.option('--mfa-expiration', '-E', type=click.INT, default=3600,
-              help='number of seconds after which the MFA credentials are no longer valid')
-@click.option('--role-expiration', '-R', type=click.INT, default=900,
-              help='number of seconds after which the role credentials are no longer valid')
-@click.option('--console-expiration', '-C', type=click.INT, default=900,
-              help='number of seconds after which the console credentials are no longer valid')
-@click.option('--token', '-t', help='from your MFA device')
-@click.argument('args', nargs=-1)
-def main(
-        login_profile, profile, role, account_id, console, magic_link, keys, verbose, mfa_expiration, role_expiration,
-        console_expiration, token, args):
-    """
-    single sign-on login using MFA, role based access and the secure token service.
+    def set_aws_client(self, aws_client):
+        """
+        Initiates the sts client for future use using the source profile
+        access keys.
+        """
+        access_keys = get_section(self.aws_credentials, self.source_profile)
+        
+        if len(access_keys) == 0:
+            print("ERROR: profile {} not found.".format(self.source_profile))
+            exit(1)
 
-    """
-    if login_profile is None:
-        login_profile = os.getenv('AWS_DEFAULT_LOGIN_PROFILE', 'login')
-
-    if profile is None:
-        if len(args) > 0:
-            profile = args[0]
-            args = args[1:]
+        kwargs = {
+            'aws_access_key_id': access_keys['aws_access_key_id'],
+            'aws_secret_access_key': access_keys['aws_secret_access_key']
+        }
+        if 'aws_session_token' in access_keys:
+            kwargs['aws_session_token'] = access_keys['aws_session_token']
+        if aws_client == 'sts':
+            self.sts = boto3.client('sts', **kwargs)
         else:
-            profile = os.getenv('AWS_DEFAULT_PROFILE', 'default')
-
-    if profile == login_profile:
-        sys.stderr.write('ERROR: --profile and --login-profile must be different\n')
-        sys.exit(1)
-
-    try:
-        login = AWSLogin(verbose=verbose)
-
-        login.mfa_expiration = mfa_expiration
-        login.role_expiration = role_expiration
-        login.console_expiration = console_expiration
-        login.token = token
-        login.profile = profile
-        login.login_profile = login_profile
-
-        login.read_login_credentials()
-        login.check_and_set_mfa_session()
-        login.assume_role_credentials(role, account_id)
-
-    except ClientError as e:
-        sys.stderr.write('{}'.format(e))
-        sys.exit(1)
-
-    if console or magic_link:
-        link = login.generate_magic_link()
-        if magic_link:
-            sys.stdout.write('{}\n'.format(link))
-        if console:
-            chrome(link)
-
-    if keys:
-        login.show_keys()
-
-    if len(args) > 0:
-        execute_command(profile, list(args))
+            self.iam = boto3.client('iam', **kwargs)
 
 
-def execute_command(profile, command):
-    env = os.environ.copy()
-    env['AWS_DEFAULT_PROFILE'] = profile
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-    output = process.communicate()
-    sys.stdout.write(output[0].decode())
-    sys.stdout.write(output[1].decode())
-    if process.returncode != 0:
-        sys.exit(process.returncode)
-
-
-def chrome(link):
-    command = '/usr/bin/open "' + link + '"'
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=None, shell=True)
-    output = process.communicate()
-
-
-def read_credentials(profile, verbose=False):
-    filename = os.path.expanduser('~/.aws/credentials')
-    if not os.path.isfile(filename):
-        print("ERROR: ~/.aws/credentials does not exist")
-        sys.exit(1)
-
+def set_credentials_section(file, section, **kwargs):
+    """
+    This function writes the kwargs to the file specified. In most
+    cases this is just ~/.aws/credentials because this is default.
+    """
+    filename = os.path.expanduser(file)
+    dirname = os.path.dirname(filename)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
     config = configparser.ConfigParser()
     config.read(filename)
-    if profile in config.sections():
-        return config[profile]
+    if not config.has_section(section):
+        config.add_section(section)
+    config.set(section, 'aws_access_key_id', kwargs['aws_access_key_id'])
+    config.set(section, 'aws_secret_access_key', kwargs['aws_secret_access_key'])
+    config.set(section, 'aws_session_token', kwargs['aws_session_token'])
+    if 'expiration' in kwargs:
+        config.set(section, 'expiration', kwargs['expiration'].strftime('%Y-%m-%d %H:%M'))
+    with open(filename, 'w') as fp:
+        config.write(fp)
+
+
+def set_config_section(file, section, **kwargs):
+    """
+    Role profiles are written to a config file, most common is
+    ~/.aws/config.
+    """
+    filename = os.path.expanduser(file)
+    dirname = os.path.dirname(filename)
+    if not os.path.exists(dirname):
+        os.makedirs(dirname)
+    config = configparser.ConfigParser()
+    config.read(filename)
+    if not config.has_section(section):
+        config.add_section(section)
+    config.set(section, 'role_arn', kwargs['role_arn'])
+    config.set(section, 'source_profile', kwargs['source_profile'])
+    config.set(section, 'mfa_serial', kwargs['mfa_serial'])
+    config.set(section, 'external_id', kwargs['external_id'])
+    with open(filename, 'w') as fp:
+        config.write(fp)
+
+
+def get_section(file, section):
+    """
+    A default reader for config files, which applies to
+    ~/.aws/credentials and ~/.aws/config. In case a section
+    is not found, it will return an empty dict.
+    """
+    filename = os.path.expanduser(file)
+    if not os.path.isfile(filename):
+        print("ERROR: {} does not exist".format(file))
+        sys.exit(1)
+    config = configparser.ConfigParser()
+    config.read(filename)
+    if section in config.sections():
+        return config[section]
     else:
-        if verbose:
-            sys.stderr.write('INFO: profile "{}" not found in ~/.aws/credentials: '.format(profile))
         return {}
 
 
 def profile_expired(credentials):
+    """ Simple function to check if the expiration is expired true or false """
     if 'expiration' in credentials:
         expiration = datetime.strptime(credentials['expiration'], '%Y-%m-%d %H:%M')
         return datetime.utcnow() >= expiration
@@ -306,37 +427,11 @@ def profile_expired(credentials):
         return True
 
 
-def write_credentials(profile, credentials, role_arn=None, source_profile=None):
-    filename = os.path.expanduser('~/.aws/credentials')
-    dirname = os.path.dirname(filename)
-
-    if not os.path.exists(dirname):
-        os.makedirs(dirname)
-
-    config = configparser.ConfigParser()
-    config.read(filename)
-    if not config.has_section(profile):
-        config.add_section(profile)
-    config.set(profile, 'aws_access_key_id', credentials['AccessKeyId'])
-    config.set(profile, 'aws_secret_access_key', credentials['SecretAccessKey'])
-    config.set(profile, 'aws_session_token', credentials['SessionToken'])
-
-    if role_arn is not None:
-        config.set(profile, 'assume_role_arn', role_arn)
-
-    if 'Expiration' in credentials:
-        config.set(profile, 'expiration', credentials['Expiration'].strftime('%Y-%m-%d %H:%M'))
-    elif 'expiration' in config:
-        del config['expiration']
-
-    if source_profile is not None:
-        config.set(profile, 'source_profile', source_profile)
-    elif 'source_profile' in config:
-        del config['expiration']
-
-    with open(filename, 'w') as fp:
-        config.write(fp)
-
+def open_link(link):
+    """ Simple function to open the given link """
+    command = '/usr/bin/open "' + link + '"'
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=None, shell=True)
+    output = process.communicate()
 
 if __name__ == '__main__':
     main()
