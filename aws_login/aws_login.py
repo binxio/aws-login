@@ -148,7 +148,7 @@ class AWSLogin(object):
                 response = self.sts.get_session_token(
                     DurationSeconds=self.mfa_expiration,
                     SerialNumber=mfa_serial,
-                    TokenCode=str(token)
+                    TokenCode=str(self.token)
                 )
             except ClientError as e:
                 print("ERROR: {}".format(e))
@@ -223,7 +223,7 @@ class AWSLogin(object):
                 RoleSessionName=session_name,
                 DurationSeconds=self.role_expiration,
                 SerialNumber=mfa_serial,
-                TokenCode=str(token)
+                TokenCode=str(self.token)
             )
         except ClientError as e:
             print("ERROR: {}".format(e))
@@ -286,7 +286,7 @@ class AWSLogin(object):
             'source_profile': self.source_profile,
             'external_id': self.account_id
         }
-        set_config_section(self.aws_credentials,
+        set_config_section(self.aws_config,
                            'profile ' + self.target_profile,
                            **kwargs)
         message = "INFO: now use --profile {} in future aws cli commands"
@@ -300,7 +300,8 @@ class AWSLogin(object):
     def ask_user_for_token(self, mfa_serial):
         """ returns the token code if valid entered by user """
         message = "Enter MFA code for {}:".format(mfa_serial)
-        self.token if self.token is not None else getpass(message)
+        if self.token is None:
+            self.token = getpass(message)
         if len(self.token) != 6:
             print("ERROR: token code is not 6 characters")
             exit(1)
