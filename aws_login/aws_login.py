@@ -148,7 +148,7 @@ class AWSLogin(object):
                 response = self.sts.get_session_token(
                     DurationSeconds=self.mfa_expiration,
                     SerialNumber=mfa_serial,
-                    TokenCode=str(token)
+                    TokenCode=str(self.token)
                 )
             except ClientError as e:
                 print("ERROR: {}".format(e))
@@ -300,7 +300,8 @@ class AWSLogin(object):
     def ask_user_for_token(self, mfa_serial):
         """ returns the token code if valid entered by user """
         message = "Enter MFA code for {}:".format(mfa_serial)
-        self.token if self.token is not None else getpass(message)
+        if self.token is None:
+            self.token = getpass(message)
         if len(self.token) != 6:
             print("ERROR: token code is not 6 characters")
             exit(1)
