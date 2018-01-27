@@ -286,7 +286,7 @@ class AWSLogin(object):
             'source_profile': self.source_profile,
             'external_id': self.account_id
         }
-        set_config_section(self.aws_credentials,
+        set_config_section(self.aws_config,
                            'profile ' + self.target_profile,
                            **kwargs)
         message = "INFO: now use --profile {} in future aws cli commands"
