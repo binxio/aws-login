@@ -223,7 +223,7 @@ class AWSLogin(object):
                 RoleSessionName=session_name,
                 DurationSeconds=self.role_expiration,
                 SerialNumber=mfa_serial,
-                TokenCode=str(token)
+                TokenCode=str(self.token)
             )
         except ClientError as e:
             print("ERROR: {}".format(e))
