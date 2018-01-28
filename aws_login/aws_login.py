@@ -283,8 +283,7 @@ class AWSLogin(object):
         kwargs = {
             'role_arn': role_arn,
             'mfa_serial': mfa_serial,
-            'source_profile': self.source_profile,
-            'external_id': self.account_id
+            'source_profile': self.source_profile
         }
         set_config_section(self.aws_config,
                            'profile ' + self.target_profile,
@@ -396,7 +395,6 @@ def set_config_section(file, section, **kwargs):
     config.set(section, 'role_arn', kwargs['role_arn'])
     config.set(section, 'source_profile', kwargs['source_profile'])
     config.set(section, 'mfa_serial', kwargs['mfa_serial'])
-    config.set(section, 'external_id', kwargs['external_id'])
     with open(filename, 'w') as fp:
         config.write(fp)
 
