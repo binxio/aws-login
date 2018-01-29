@@ -118,55 +118,104 @@ class AWSLogin(object):
         This function starts an mfa session and writes the access keys
         to the credentials file of boto3 and aws cli are using so they
         can be used natively in future commands. In case the current
-        session is not expired, the old one is reused (saves typing 
+        session is not expired, the old one is reused (saves typing
         the MFA. Shorter expiration is more secure though.)
         """
 
-        self.start_aws_connections()
+        """ Is it a personal MFA session, or an MFA session for assuming
+        a role? It depends if the role is written to the config file. """
+        tpcfg = get_section(self.aws_config,
+                            'profile ' + self.source_profile)
 
-        """
-        If --profile is given, and/or --source-profile and 
-        --target-profile are identical, the target profile is
-        overwritten with the default _mfa suffix.
-        """
-        if self.source_profile == self.target_profile:
-            self.target_profile = self.source_profile + '_mfa'
+        if 'role_arn' in tpcfg:
+            
+            """ Now update the source profile """
+            self.source_profile = tpcfg['source_profile']
+            self.start_aws_connections()
 
-        creds = get_section(self.aws_credentials, self.source_profile)
+            target_creds = get_section(self.aws_credentials,
+                                       self.target_profile)
 
-        if 'aws_access_key_id' not in creds:
-            print("ERROR: Profile {} not found.".format(self.source_profile))
-            exit(1)
+            if profile_expired(target_creds):
+                mfa_serial = tpcfg['mfa_serial']
+                role_arn = tpcfg['role_arn']
+                session_name = self.target_profile
+                self.ask_user_for_token(mfa_serial)
 
-        target_creds = get_section(self.aws_credentials, self.target_profile)
+                try:
+                    response = self.sts.assume_role(
+                        RoleArn=role_arn,
+                        RoleSessionName=session_name,
+                        DurationSeconds=self.role_expiration,
+                        SerialNumber=mfa_serial,
+                        TokenCode=str(self.token)
+                    )
+                except ClientError as e:
+                    print("ERROR: {}".format(e))
+                    exit(1)
 
-        if profile_expired(target_creds):
-            mfa_serial = self.get_mfa_serial()
-            self.ask_user_for_token(mfa_serial)
+                credentials = response['Credentials']
+                self.write_mfa_session(credentials)
 
-            try:
-                response = self.sts.get_session_token(
-                    DurationSeconds=self.mfa_expiration,
-                    SerialNumber=mfa_serial,
-                    TokenCode=str(self.token)
-                )
-            except ClientError as e:
-                print("ERROR: {}".format(e))
+                warning = 'INFO: Profile {} can now be used.'
+                print(warning.format(self.target_profile))
+
+            else:
+                warning = 'INFO: Profile {} is not expired.'
+                print(warning.format(self.target_profile))
+        
+        else:
+            self.start_aws_connections()
+            """
+            If --profile is given, and/or --source-profile and 
+            --target-profile are identical, the target profile is
+            overwritten with the default _mfa suffix.
+            """
+            if self.source_profile == self.target_profile:
+                self.target_profile = self.source_profile + '_mfa'
+
+            creds = get_section(self.aws_credentials, self.source_profile)
+
+            if 'aws_access_key_id' not in creds:
+                print("ERROR: Profile {} not found.".format(self.source_profile))
                 exit(1)
 
-            credentials = response['Credentials']
-            session = {
-                'aws_access_key_id': credentials['AccessKeyId'],
-                'aws_secret_access_key': credentials['SecretAccessKey'],
-                'aws_session_token': credentials['SessionToken'],
-                'expiration': credentials['Expiration']
-            }
-            set_credentials_section(self.aws_credentials,
-                                    self.target_profile,
-                                    **session)
-        else:
-            warning = 'INFO: Profile {} is not expired.'
-            print(warning.format(self.target_profile))
+            target_creds = get_section(self.aws_credentials, self.target_profile)
+
+            if profile_expired(target_creds):
+                mfa_serial = self.get_mfa_serial()
+                self.ask_user_for_token(mfa_serial)
+
+                try:
+                    response = self.sts.get_session_token(
+                        DurationSeconds=self.mfa_expiration,
+                        SerialNumber=mfa_serial,
+                        TokenCode=str(self.token)
+                    )
+                except ClientError as e:
+                    print("ERROR: {}".format(e))
+                    exit(1)
+
+                credentials = response['Credentials']
+                self.write_mfa_session(credentials)
+
+                warning = 'INFO: Profile {} can now be used.'
+                print(warning.format(self.target_profile))
+                
+            else:
+                warning = 'INFO: Profile {} is not expired.'
+                print(warning.format(self.target_profile))
+
+    def write_mfa_session(self, credentials):
+        session = {
+            'aws_access_key_id': credentials['AccessKeyId'],
+            'aws_secret_access_key': credentials['SecretAccessKey'],
+            'aws_session_token': credentials['SessionToken'],
+            'expiration': credentials['Expiration']
+        }
+        set_credentials_section(self.aws_credentials,
+                                self.target_profile,
+                                **session)
 
     def get_magic_link(self):
         """
