@@ -351,8 +351,8 @@ class AWSLogin(object):
         message = "Enter MFA code for {}:".format(mfa_serial)
         if self.token is None:
             self.token = getpass(message)
-        if len(self.token) != 6:
-            print("ERROR: token code is not 6 characters")
+        if len(self.token) == 0:
+            print("ERROR: no token provided")
             exit(1)
 
     def get_username(self):
